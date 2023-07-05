@@ -7,6 +7,7 @@ import (
 
 	"github.com/Azure/azure-sdk-for-go/sdk/azcore"
 	"github.com/Azure/azure-sdk-for-go/sdk/azcore/to"
+	"github.com/Azure/azure-sdk-for-go/sdk/azidentity"
 	"github.com/Azure/azure-sdk-for-go/sdk/storage/azblob"
 
 	"github.com/Azure/azure-sdk-for-go/sdk/storage/azblob/bloberror"
@@ -237,15 +238,9 @@ func (az *azStorage) FlushCaches(ctx context.Context) error {
 	return nil
 }
 
-// New creates new Azure Blob Storage-backed storage with specified options:
-//
-// - the 'Container', 'StorageAccount' and 'StorageKey' fields are required and all other parameters are optional.
+// New creates new Azure Blob Storage-backed storage with specified options
 func New(ctx context.Context, opt *Options, isCreate bool) (blob.Storage, error) {
 	_ = isCreate
-
-	if opt.Container == "" {
-		return nil, errors.New("container name must be specified")
-	}
 
 	var (
 		service    *azblob.Client
@@ -260,10 +255,12 @@ func New(ctx context.Context, opt *Options, isCreate bool) (blob.Storage, error)
 	storageHostname := fmt.Sprintf("%v.%v", opt.StorageAccount, storageDomain)
 
 	switch {
+	// shared access signature
 	case opt.SASToken != "":
 		service, serviceErr = azblob.NewClientWithNoCredential(
 			fmt.Sprintf("https://%s?%s", storageHostname, opt.SASToken), nil)
 
+	// storage account access key
 	case opt.StorageKey != "":
 		// create a credentials object.
 		cred, err := azblob.NewSharedKeyCredential(opt.StorageAccount, opt.StorageKey)
@@ -275,18 +272,32 @@ func New(ctx context.Context, opt *Options, isCreate bool) (blob.Storage, error)
 			fmt.Sprintf("https://%s/", storageHostname), cred, nil,
 		)
 
+	// Azure AD
 	default:
-		return nil, errors.Errorf("either storage key or SAS token must be provided")
+		cred, err := azidentity.NewDefaultAzureCredential(nil)
+		if err != nil {
+			return nil, errors.Wrap(err, "unable to initialize Azure default credential")
+		}
+		service, serviceErr = azblob.NewClient(fmt.Sprintf("https://%s/", storageHostname), cred, nil)
 	}
 
 	if serviceErr != nil {
 		return nil, errors.Wrap(serviceErr, "opening azure service")
 	}
 
+	return NewWithBlobClient(ctx, opt, service)
+}
+
+// NewWithBlobClient creates new Azure Blob Storage-backed storage with specified blob client
+func NewWithBlobClient(ctx context.Context, opt *Options, client *azblob.Client) (blob.Storage, error) {
+	if opt.Container == "" {
+		return nil, errors.New("container name must be specified")
+	}
+
 	raw := &azStorage{
 		Options:   *opt,
 		container: opt.Container,
-		service:   service,
+		service:   client,
 	}
 
 	az := retrying.NewWrapper(raw)
