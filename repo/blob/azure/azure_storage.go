@@ -7,6 +7,7 @@ import (
 
 	"github.com/Azure/azure-sdk-for-go/sdk/azcore"
 	"github.com/Azure/azure-sdk-for-go/sdk/azcore/to"
+	"github.com/Azure/azure-sdk-for-go/sdk/azidentity"
 	"github.com/Azure/azure-sdk-for-go/sdk/storage/azblob"
 
 	"github.com/Azure/azure-sdk-for-go/sdk/storage/azblob/bloberror"
@@ -25,19 +26,19 @@ const (
 	timeMapKey = "Kopiamtime" // this must be capital letter followed by lowercase, to comply with AZ tags naming convention.
 )
 
-type azStorage struct {
+type AzStorage struct {
 	Options
 	blob.UnsupportedBlobRetention
 
-	service   *azblob.Client
-	container string
+	Service   *azblob.Client
+	Container string
 }
 
-func (az *azStorage) GetCapacity(ctx context.Context) (blob.Capacity, error) {
+func (az *AzStorage) GetCapacity(ctx context.Context) (blob.Capacity, error) {
 	return blob.Capacity{}, blob.ErrNotAVolume
 }
 
-func (az *azStorage) GetBlob(ctx context.Context, b blob.ID, offset, length int64, output blob.OutputBuffer) error {
+func (az *AzStorage) GetBlob(ctx context.Context, b blob.ID, offset, length int64, output blob.OutputBuffer) error {
 	if offset < 0 {
 		return errors.Wrap(blob.ErrInvalidRange, "invalid offset")
 	}
@@ -55,7 +56,7 @@ func (az *azStorage) GetBlob(ctx context.Context, b blob.ID, offset, length int6
 		opt.Range.Count = l1
 	}
 
-	resp, err := az.service.DownloadStream(ctx, az.container, az.getObjectNameString(b), opt)
+	resp, err := az.Service.DownloadStream(ctx, az.Container, az.getObjectNameString(b), opt)
 	if err != nil {
 		return translateError(err)
 	}
@@ -75,8 +76,8 @@ func (az *azStorage) GetBlob(ctx context.Context, b blob.ID, offset, length int6
 	return blob.EnsureLengthExactly(output.Length(), length)
 }
 
-func (az *azStorage) GetMetadata(ctx context.Context, b blob.ID) (blob.Metadata, error) {
-	bc := az.service.ServiceClient().NewContainerClient(az.container).NewBlobClient(az.getObjectNameString(b))
+func (az *AzStorage) GetMetadata(ctx context.Context, b blob.ID) (blob.Metadata, error) {
+	bc := az.Service.ServiceClient().NewContainerClient(az.Container).NewBlobClient(az.getObjectNameString(b))
 
 	fi, err := bc.GetProperties(ctx, nil)
 	if err != nil {
@@ -117,7 +118,7 @@ func translateError(err error) error {
 	return err
 }
 
-func (az *azStorage) PutBlob(ctx context.Context, b blob.ID, data blob.Bytes, opts blob.PutOptions) error {
+func (az *AzStorage) PutBlob(ctx context.Context, b blob.ID, data blob.Bytes, opts blob.PutOptions) error {
 	switch {
 	case opts.HasRetentionOptions():
 		return errors.Wrap(blob.ErrUnsupportedPutBlobOption, "blob-retention")
@@ -140,7 +141,7 @@ func (az *azStorage) PutBlob(ctx context.Context, b blob.ID, data blob.Bytes, op
 		Metadata: metadata,
 	}
 
-	resp, err := az.service.UploadStream(ctx, az.container, az.getObjectNameString(b), data.Reader(), uso)
+	resp, err := az.Service.UploadStream(ctx, az.Container, az.getObjectNameString(b), data.Reader(), uso)
 	if err != nil {
 		return translateError(err)
 	}
@@ -153,8 +154,8 @@ func (az *azStorage) PutBlob(ctx context.Context, b blob.ID, data blob.Bytes, op
 }
 
 // DeleteBlob deletes azure blob from container with given ID.
-func (az *azStorage) DeleteBlob(ctx context.Context, b blob.ID) error {
-	_, err := az.service.DeleteBlob(ctx, az.container, az.getObjectNameString(b), nil)
+func (az *AzStorage) DeleteBlob(ctx context.Context, b blob.ID) error {
+	_, err := az.Service.DeleteBlob(ctx, az.Container, az.getObjectNameString(b), nil)
 	err = translateError(err)
 
 	// don't return error if blob is already deleted
@@ -165,15 +166,15 @@ func (az *azStorage) DeleteBlob(ctx context.Context, b blob.ID) error {
 	return err
 }
 
-func (az *azStorage) getObjectNameString(b blob.ID) string {
+func (az *AzStorage) getObjectNameString(b blob.ID) string {
 	return az.Prefix + string(b)
 }
 
 // ListBlobs list azure blobs with given prefix.
-func (az *azStorage) ListBlobs(ctx context.Context, prefix blob.ID, callback func(blob.Metadata) error) error {
+func (az *AzStorage) ListBlobs(ctx context.Context, prefix blob.ID, callback func(blob.Metadata) error) error {
 	prefixStr := az.Prefix + string(prefix)
 
-	pager := az.service.NewListBlobsFlatPager(az.container, &azblob.ListBlobsFlatOptions{
+	pager := az.Service.NewListBlobsFlatPager(az.Container, &azblob.ListBlobsFlatOptions{
 		Prefix: &prefixStr,
 		Include: azblob.ListBlobsInclude{
 			Metadata: true,
@@ -218,28 +219,26 @@ func stringDefault(s *string, def string) string {
 	return *s
 }
 
-func (az *azStorage) ConnectionInfo() blob.ConnectionInfo {
+func (az *AzStorage) ConnectionInfo() blob.ConnectionInfo {
 	return blob.ConnectionInfo{
 		Type:   azStorageType,
 		Config: &az.Options,
 	}
 }
 
-func (az *azStorage) DisplayName() string {
+func (az *AzStorage) DisplayName() string {
 	return fmt.Sprintf("Azure: %v", az.Options.Container)
 }
 
-func (az *azStorage) Close(ctx context.Context) error {
+func (az *AzStorage) Close(ctx context.Context) error {
 	return nil
 }
 
-func (az *azStorage) FlushCaches(ctx context.Context) error {
+func (az *AzStorage) FlushCaches(ctx context.Context) error {
 	return nil
 }
 
-// New creates new Azure Blob Storage-backed storage with specified options:
-//
-// - the 'Container', 'StorageAccount' and 'StorageKey' fields are required and all other parameters are optional.
+// New creates new Azure Blob Storage-backed storage with specified options
 func New(ctx context.Context, opt *Options, isCreate bool) (blob.Storage, error) {
 	_ = isCreate
 
@@ -260,10 +259,12 @@ func New(ctx context.Context, opt *Options, isCreate bool) (blob.Storage, error)
 	storageHostname := fmt.Sprintf("%v.%v", opt.StorageAccount, storageDomain)
 
 	switch {
+	// shared access signature
 	case opt.SASToken != "":
 		service, serviceErr = azblob.NewClientWithNoCredential(
 			fmt.Sprintf("https://%s?%s", storageHostname, opt.SASToken), nil)
 
+	// storage account access key
 	case opt.StorageKey != "":
 		// create a credentials object.
 		cred, err := azblob.NewSharedKeyCredential(opt.StorageAccount, opt.StorageKey)
@@ -275,18 +276,23 @@ func New(ctx context.Context, opt *Options, isCreate bool) (blob.Storage, error)
 			fmt.Sprintf("https://%s/", storageHostname), cred, nil,
 		)
 
+	// Azure AD
 	default:
-		return nil, errors.Errorf("either storage key or SAS token must be provided")
+		cred, err := azidentity.NewDefaultAzureCredential(nil)
+		if err != nil {
+			return nil, errors.Wrap(err, "unable to initialize Azure default credential")
+		}
+		service, serviceErr = azblob.NewClient(fmt.Sprintf("https://%s/", storageHostname), cred, nil)
 	}
 
 	if serviceErr != nil {
 		return nil, errors.Wrap(serviceErr, "opening azure service")
 	}
 
-	raw := &azStorage{
+	raw := &AzStorage{
 		Options:   *opt,
-		container: opt.Container,
-		service:   service,
+		Container: opt.Container,
+		Service:   service,
 	}
 
 	az := retrying.NewWrapper(raw)
